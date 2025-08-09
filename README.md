@@ -66,9 +66,6 @@ flowchart TB
 10) **Database Load (ingestion into PSSDB).** The validated CSV is inserted or appended to the central database (or posted to an API endpoint), completing the ingestion cycle and making the data available for browsing and downstream analyses.
 
 
-
-markdown
-
 # Detailed Step Descriptions
 
 ## Step 1 — Profile (LLM)
@@ -101,7 +98,7 @@ Establish a machine-readable “contract” for the paper so downstream stages k
 
 **Shape (illustrative)**
 
-```json
+~~~json
 {
   "species": "Bos taurus",
   "common_name": "cattle (Nelore breed)",
@@ -138,6 +135,8 @@ Establish a machine-readable “contract” for the paper so downstream stages k
   ],
   "notes": "..."
 }
+~~~
+
 
 **Validation**
 - Validate against `jsonschema` (required keys, types).  
