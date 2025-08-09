@@ -66,13 +66,9 @@ flowchart TB
 10) **Database Load (ingestion into PSSDB).** The validated CSV is inserted or appended to the central database (or posted to an API endpoint), completing the ingestion cycle and making the data available for browsing and downstream analyses.
 
 
-оформлен так, как у тебя оформлено представление для меня. 
 
-
-ChatGPT said:
 markdown
-Copy
-Edit
+
 # Detailed Step Descriptions
 
 ## Step 1 — Profile (LLM)
@@ -104,43 +100,44 @@ Establish a machine-readable “contract” for the paper so downstream stages k
 - Ambiguity may be summarized in a `notes` field; facts must not be invented.
 
 **Shape (illustrative)**
-  ```json
-  {
-    "species": "Bos taurus",
-    "common_name": "cattle (Nelore breed)",
-    "assembly": "UMD3.1.1",
-    "doi": "10.1186/s12711-018-0381-2",
-    "pmid": "",
-    "article_title": "...",
-    "article_url": "https://doi.org/...",
-    "metrics": [
-      {
-        "name": "Fst",
-        "threshold": "top 1% per 100-kb window",
-        "windowing": "100 kb, 75 kb overlap",
-        "note": ""
-      },
-      {
-        "name": "XP_EHH",
-        "threshold": "mean > 2.58",
-        "windowing": "100 kb",
-        "note": ""
-      }
-    ],
-    "populations": [
-      {
-        "name": "Nelore Control",
-        "aliases": ["NeC"],
-        "note": ""
-      },
-      {
-        "name": "Nelore Selection",
-        "aliases": ["NeS"],
-        "note": ""
-      }
-    ],
-    "notes": "..."
-  }
+
+```json
+{
+  "species": "Bos taurus",
+  "common_name": "cattle (Nelore breed)",
+  "assembly": "UMD3.1.1",
+  "doi": "10.1186/s12711-018-0381-2",
+  "pmid": "",
+  "article_title": "...",
+  "article_url": "https://doi.org/...",
+  "metrics": [
+    {
+      "name": "Fst",
+      "threshold": "top 1% per 100-kb window",
+      "windowing": "100 kb, 75 kb overlap",
+      "note": ""
+    },
+    {
+      "name": "XP_EHH",
+      "threshold": "mean > 2.58",
+      "windowing": "100 kb",
+      "note": ""
+    }
+  ],
+  "populations": [
+    {
+      "name": "Nelore Control",
+      "aliases": ["NeC"],
+      "note": ""
+    },
+    {
+      "name": "Nelore Selection",
+      "aliases": ["NeS"],
+      "note": ""
+    }
+  ],
+  "notes": "..."
+}
 
 **Validation**
 - Validate against `jsonschema` (required keys, types).  
