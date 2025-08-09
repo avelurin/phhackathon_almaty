@@ -553,7 +553,7 @@ Produce one record per biological signal **per gene**, preserving the (signal ×
 
 ---
 
-## Step 8 — QC (CODE)
+## Step 9 — QC (CODE)
 
 **Purpose**  
 Guarantee that merged rows are **internally consistent, within expected ranges, and schema-valid**, before export and database load.
@@ -596,6 +596,17 @@ Guarantee that merged rows are **internally consistent, within expected ranges, 
 - **Duplication & keys**
   - No duplicate **merge keys** remain after Step 7.  
   - If duplicates exist, mark `qc_flag="duplicate_signal"`.
+- **Fail-fast rules (blocking)**
+  - `unit_unknown` — coordinates with ambiguous/missing units.  
+  - `assembly_unknown` — assembly not defined while annotation is enabled.  
+  - `orientation_uncertain` — directional metrics lack verifiable population order.
+
+- **Key uniqueness (gene-aware)**
+  - No duplicates by the gene-aware keys:
+  - SNP: `(species, assembly, chrom, snp_pos, population1, population2, gene_id)`
+  - Window: `(species, assembly, chrom, start, end, population1, population2, gene_id)`
+
+- 
 
 **Outputs & flags**
 - Every failed check yields a row-level `qc_flag` (comma-separated when multiple):  
@@ -613,7 +624,7 @@ Guarantee that merged rows are **internally consistent, within expected ranges, 
 - Record tool versions, rule set hash, and rule outcomes.  
 - Cache uses `(row_sha1, rules_hash)`; when rules change, only affected rows are rechecked.
 
-## Step 9 — Export (CODE)
+## Step 10 — Export (CODE)
 
 **Purpose**  
 Emit a **merge-ready CSV** that strictly follows the PSSDB column order, types, and CSV dialect, together with minimal artifacts that prove integrity.
@@ -659,7 +670,7 @@ Emit a **merge-ready CSV** that strictly follows the PSSDB column order, types, 
 
 ---
 
-## Step 10 — Database Load (CODE)
+## Step 11 — Database Load (CODE)
 
 **Purpose**  
 Insert the validated CSV into the central PSSDB **safely and idempotently**, with referential integrity and reproducible audit logs.
@@ -726,4 +737,25 @@ Insert the validated CSV into the central PSSDB **safely and idempotently**, wit
 **Provenance & audit**
 - Save DB DDL version, connection parameters hash (not secrets), and the exact SQL statements (or API endpoint and payload IDs).  
 - Keep `batch_id`, counts, and timing; include `result.sha256` to link batch → file artifact.
+
+## Config additions
+
+```yaml
+# config/normalization.yaml
+fail_fast:
+  unit_unknown: true        # stop when units for coords are unclear
+  assembly_missing: true    # stop when assembly is required for annotation
+
+# config/liftover.yaml
+target_assembly: "ARS-UCD1.2"
+loss_tolerance: 0.05        # fail if >5% rows cannot be lifted
+chains:
+  "UMD3.1.1->ARS-UCD1.2": "chains/umd3_to_ars.chain.gz"
+
+# config/orientation.yaml
+directional_metrics: ["XP_EHH"]
+require_evidence_to_flip: true  # do not flip sign without explicit evidence (table/figure caption)
+markdown
+Copy
+Edit
 
