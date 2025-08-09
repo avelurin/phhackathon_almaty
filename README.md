@@ -478,12 +478,9 @@ Ensure coordinates match the target assembly used for annotation and downstream 
 Add **biological context** by intersecting normalized genomic intervals with **assembly-matched** gene annotations, filling `gene_symbol`, `gene_id`, and `gene_overlap_type`.
 
 **Inputs**
-- `normalized_rows.parquet`
+- `normalized_rows.lifted.parquet` (if liftover was performed) **or** `normalized_rows.parquet`
 - Assembly-specific **GTF/GFF** (e.g., `data/gtf/UMD3.1.1.gtf.gz`)
 - Optional: `config/annotation.yaml` (region sizes & precedence)
-  - `promoter_bp: 2000` (upstream/downstream window)
-  - `overlap_priority: [exon, utr, intron, promoter, downstream, intergenic]`
-  - `nearest_k: 1` (how many nearest genes to keep for intergenic sites)
 
 **Outputs**
 - `annotated_rows.parquet`
@@ -525,7 +522,29 @@ Add **biological context** by intersecting normalized genomic intervals with **a
 
 ---
 
-## Step 8 — Metric Merge (CODE, gene-aware)
+## Step 8 — Orientation Check (CODE, fail-fast)
+
+**Purpose**  
+Verify population orientation for **directional metrics** (e.g., XP_EHH) before merging, using evidence from the profile and table/figure captions.
+
+**Inputs**
+- `annotated_rows.parquet`
+- `out/paper_profile.json`
+- `config/orientation.yaml` (directional metrics, require_evidence_to_flip)
+
+**Behavior**
+- Establish canonical `population1/2` order from the profile.
+- If a row arrives with swapped populations:
+  - Flip populations; **flip sign** for directional metrics **only** if there is explicit evidence (caption/text); otherwise mark `orientation_uncertain`.
+- **Fail-fast**: if any directional metric is present and orientation cannot be verified, stop with `orientation_uncertain`.
+
+**Outputs**
+- `annotated_rows.oriented.parquet` (or pass-through alias if unchanged)
+- `logs/orientation.report.json` (flips, uncertainties, evidence sources)
+
+---
+
+## Step 9 — Metric Merge (CODE, gene-aware)
 
 **Purpose**  
 Produce one record per biological signal **per gene**, preserving the (signal × gene) mapping.
@@ -553,7 +572,7 @@ Produce one record per biological signal **per gene**, preserving the (signal ×
 
 ---
 
-## Step 9 — QC (CODE)
+## Step 10 — QC (CODE)
 
 **Purpose**  
 Guarantee that merged rows are **internally consistent, within expected ranges, and schema-valid**, before export and database load.
@@ -594,7 +613,7 @@ Guarantee that merged rows are **internally consistent, within expected ranges, 
   - If a numeric value exists, the corresponding `*_presence` must be empty.  
   - If no numeric value and the method is listed in the profile for this comparison, `*_presence="used"` is allowed.
 - **Duplication & keys**
-  - No duplicate **merge keys** remain after Step 7.  
+  - No duplicate **merge keys** remain after Merge step.  
   - If duplicates exist, mark `qc_flag="duplicate_signal"`.
 - **Fail-fast rules (blocking)**
   - `unit_unknown` — coordinates with ambiguous/missing units.  
@@ -624,7 +643,7 @@ Guarantee that merged rows are **internally consistent, within expected ranges, 
 - Record tool versions, rule set hash, and rule outcomes.  
 - Cache uses `(row_sha1, rules_hash)`; when rules change, only affected rows are rechecked.
 
-## Step 10 — Export (CODE)
+## Step 11 — Export (CODE)
 
 **Purpose**  
 Emit a **merge-ready CSV** that strictly follows the PSSDB column order, types, and CSV dialect, together with minimal artifacts that prove integrity.
@@ -670,7 +689,7 @@ Emit a **merge-ready CSV** that strictly follows the PSSDB column order, types, 
 
 ---
 
-## Step 11 — Database Load (CODE)
+## Step 12 — Database Load (CODE)
 
 **Purpose**  
 Insert the validated CSV into the central PSSDB **safely and idempotently**, with referential integrity and reproducible audit logs.
@@ -755,7 +774,5 @@ chains:
 # config/orientation.yaml
 directional_metrics: ["XP_EHH"]
 require_evidence_to_flip: true  # do not flip sign without explicit evidence (table/figure caption)
-markdown
-Copy
-Edit
+
 
