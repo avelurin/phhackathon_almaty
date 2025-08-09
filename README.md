@@ -104,24 +104,43 @@ Establish a machine-readable “contract” for the paper so downstream stages k
 - Ambiguity may be summarized in a `notes` field; facts must not be invented.
 
 **Shape (illustrative)**
+```json
+{
+  "species": "Bos taurus",
+  "common_name": "cattle (Nelore breed)",
+  "assembly": "UMD3.1.1",
+  "doi": "10.1186/s12711-018-0381-2",
+  "pmid": "",
+  "article_title": "...",
+  "article_url": "https://doi.org/...",
+  "metrics": [
     {
-      "species": "Bos taurus",
-      "common_name": "cattle (Nelore breed)",
-      "assembly": "UMD3.1.1",
-      "doi": "10.1186/s12711-018-0381-2",
-      "pmid": "",
-      "article_title": "...",
-      "article_url": "https://doi.org/...",
-      "metrics": [
-        {"name": "Fst", "threshold": "top 1% per 100-kb window", "windowing": "100 kb, 75 kb overlap", "note": ""},
-        {"name": "XP_EHH", "threshold": "mean > 2.58", "windowing": "100 kb", "note": ""}
-      ],
-      "populations": [
-        {"name": "Nelore Control", "aliases": ["NeC"], "note": ""},
-        {"name": "Nelore Selection", "aliases": ["NeS"], "note": ""}
-      ],
-      "notes": "..."
+      "name": "Fst",
+      "threshold": "top 1% per 100-kb window",
+      "windowing": "100 kb, 75 kb overlap",
+      "note": ""
+    },
+    {
+      "name": "XP_EHH",
+      "threshold": "mean > 2.58",
+      "windowing": "100 kb",
+      "note": ""
     }
+  ],
+  "populations": [
+    {
+      "name": "Nelore Control",
+      "aliases": ["NeC"],
+      "note": ""
+    },
+    {
+      "name": "Nelore Selection",
+      "aliases": ["NeS"],
+      "note": ""
+    }
+  ],
+  "notes": "..."
+}
 
 **Validation**
 - Validate against `jsonschema` (required keys, types).  
