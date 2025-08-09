@@ -2,38 +2,41 @@
 
 The diagram and summary below describe how the ingestion component converts **PDF articles and supplements** into a **strict, merge‑ready CSV** and then **loads it into the database**.
 
-## Block Diagram 
+## Block Diagram (with fail-fast gates and gene-aware merge)
 ```mermaid
 flowchart TB
   %% Styles
-  classDef llm fill:#f3e8ff,stroke:#7e22ce,stroke-width:1.2px,rx:8,ry:8,color:#2e1065;
+  classDef llm  fill:#f3e8ff,stroke:#7e22ce,stroke-width:1.2px,rx:8,ry:8,color:#2e1065;
   classDef code fill:#eef,stroke:#6b7bb6,stroke-width:1.2px,rx:8,ry:8,color:#0f1a3b;
-  classDef out fill:#fff7e6,stroke:#c08a2d,rx:6,ry:6,color:#5c3b00;
+  classDef gate fill:#ffeaea,stroke:#c2410c,stroke-width:1.2px,rx:8,ry:8,color:#7c2d12;
+  classDef out  fill:#fff7e6,stroke:#c08a2d,rx:6,ry:6,color:#5c3b00;
   linkStyle default stroke:#7f8fbf,stroke-width:1.2px
 
   %% Top row (left → right)
   subgraph TOP[ ]
     direction LR
-    A["Profile (LLM)<br/>Extract species, assembly, metrics, populations<br/>→ paper_profile.json"]:::llm
-    B["Parsing (CODE)<br/>Read tables and text; keep provenance<br/>→ raw_tables/, raw_text/, provenance.jsonl"]:::code
-    C["Header Mapping (LLM)<br/>Map source headers to target schema<br/>→ table_mapping/"]:::llm
-    D["Row Assembly (LLM)<br/>Produce schema-shaped rows<br/>→ intermediate_rows.jsonl"]:::llm
+    A["Profile (LLM)<br/>→ paper_profile.json"]:::llm
+    B["Parsing (CODE)<br/>→ raw_tables/, raw_text/, provenance.jsonl"]:::code
+    C["Header Mapping (LLM)<br/>→ table_mapping/"]:::llm
+    D["Row Assembly (LLM)<br/>→ intermediate_rows.jsonl"]:::llm
   end
 
   %% Bottom row (right → left)
   subgraph BOTTOM[ ]
     direction RL
-    E["Normalization (CODE)<br/>Unify units and names; kb→bp; types<br/>→ normalized_rows.parquet"]:::code
-    F["Gene Annotation (CODE)<br/>Intersect with GTF/GFF for the assembly<br/>→ annotated_rows.parquet"]:::code
-    G["Metric Merge (CODE)<br/>Combine Fst, XP-EHH, iHS per signal<br/>→ merged_rows.parquet"]:::code
-    H["QC (CODE)<br/>Validate coordinates, fields, presence rules<br/>→ out/qc_report.json"]:::code
-    I["Export (CODE)<br/>Exact column order; schema-checked CSV<br/>→ out/result.csv"]:::out
-    J["Database Load (CODE)<br/>Insert or append into PSSDB<br/>→ database or API"]:::code
+    E1["Unit Check (CODE, fail-fast)<br/>units must be explicit"]:::gate
+    E2["Normalization (CODE)<br/>kb→bp; names; types<br/>→ normalized_rows.parquet"]:::code
+    F["Assembly Check & Liftover (CODE)<br/>(optional, fail-fast if needed)<br/>→ normalized_rows.lifted.parquet"]:::code
+    G["Gene Annotation (CODE)<br/>→ annotated_rows.parquet"]:::code
+    H1["Orientation Check (CODE, fail-fast)<br/>directional metrics, pop order"]:::gate
+    H2["Metric Merge (CODE, gene-aware)<br/>→ merged_rows.parquet"]:::code
+    I["QC (CODE)<br/>→ out/qc_report.json"]:::code
+    J["Export (CODE)<br/>→ out/result.csv"]:::out
+    K["Database Load (CODE)<br/>→ DB / API"]:::code
   end
 
-  %% Flow connections forming an S
-  A --> B --> C --> D --> E
-  E --> F --> G --> H --> I --> J
+  %% S-flow
+  A --> B --> C --> D --> E1 --> E2 --> F --> G --> H1 --> H2 --> I --> J --> K
 
 
 ```
