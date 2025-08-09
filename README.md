@@ -505,11 +505,13 @@ Add **biological context** by intersecting normalized genomic intervals with **a
    - Take `gene_id` and `gene_symbol` from the GTF attributes (prefer curated symbols; fall back to stable IDs).  
    - Normalize symbols using a small synonym list when available (e.g., Ensembl vs. NCBI casing).
 
-**Emission policy**
-- **One row per (signal × gene)** is recommended for clarity and downstream filtering (e.g., one 100-kb window can yield multiple genes).  
-  - Alternative (configurable): keep one “best” hit per signal using `overlap_priority` and minimum distance as tie-breaker.
-- Set `gene_overlap_type` to one of: `exon`, `utr`, `intron`, `promoter`, `downstream`, `intergenic`.  
-- When multiple classes match (rare with complex transcripts), choose the **highest priority** from `overlap_priority` and list others in `notes`.
+**Emission policy (gene-aware)**
+- Emit **one row per (signal × gene)**; this is the canonical shape for downstream merge/QC/DB.
+- For very large windows, cap by `max_genes_per_signal` with truncation noted in `notes`.
+
+**Overlap classification**
+- Set `gene_overlap_type` to one of: `exon`, `utr`, `intron`, `promoter`, `downstream`, `intergenic`.
+- When multiple classes match, use the highest priority from `overlap_priority` and list others in `notes`.
 
 **Edge cases**
 - **Unplaced contigs/scaffolds:** annotate only if present in the GTF/GFF; otherwise leave gene fields empty and note `contig_unannotated`.  
