@@ -228,3 +228,173 @@ Create an **exact, lossless snapshot** of all source tables and text, with compl
 - No coordinate parsing or unit conversion.  
 - No metric presence flags.  
 (Handled in later steps: Header Mapping, Row Assembly, Normalization.)
+
+## Step 3 — Header Mapping (LLM)
+
+**Purpose**  
+Create a **stable, auditable map** from each source table’s headers to the fixed PSSDB schema field names.
+
+**Inputs**
+- `raw_tables/<table_id>.parquet` (one or many)
+- `out/paper_profile.json` (for context: species, assembly, metrics, populations)
+
+**Outputs**
+- `table_mapping/<table_id>.mapping.json` (one per table)
+- `logs/mapping.provenance.jsonl` (who/when/which prompt/version)
+
+**Responsibilities (checklist)**
+- [ ] Read the list of **source headers** exactly as extracted (no edits).
+- [ ] Map headers to **target fields** from the PSSDB schema (e.g., `chrom`, `start`, `end`, `snp_pos`, `gene_symbol`, `Fst`, `XP_EHH`, `iHS`, `population1`, `population2`, `supplement_id`, etc.).
+- [ ] Detect **unmappable** targets and list them in `missing_targets` (do not guess).
+- [ ] Capture **normalized metric names** (e.g., “XP-EHH” → `XP_EHH`; “iHS score” → `iHS`).
+- [ ] Note **units/format hints** found in header text (e.g., “kb”, “Chr:Start-End”, “p-value”).
+- [ ] Record a **confidence** level and short **notes** for ambiguity.
+
+**LLM contract**
+- The model receives only: the **header list**, the **target field list**, and minimal context from the profile.
+- Output is **strict JSON** (no prose), conforming to the mapping schema below.
+- Unknowns remain **unmapped**; never invent fields or values.
+
+**Mapping file shape (illustrative)**
+~~~json
+{
+  "source_table_id": "S4_stream_p18",
+  "source_file": "MOESM1.docx",
+  "supplement_id": "Table S4",
+  "mapping": {
+    "Genomic Region (Chr:Start(kb)-End(kb))": ["chrom", "start", "end"],
+    "Test": ["iHS"], 
+    "Candidate Genes": ["gene_symbol"],
+    "PopA": ["population1"],
+    "PopB": ["population2"]
+  },
+  "units_hints": {
+    "start": "kb",
+    "end": "kb"
+  },
+  "missing_targets": ["iHS_p", "XP_EHH", "Fst"],
+  "confidence": "medium",
+  "notes": "Window columns appear in kb; populations correspond to NeC vs NeS pairs."
+}
+~~~
+
+**Rules & edge cases**
+- **One-to-many** maps allowed: a single source header can feed multiple target fields (e.g., a “Chr:Start-End” column → `chrom`, `start`, `end`).
+- **Many-to-one** maps allowed: multiple source headers can compose one target (e.g., separate “Chr”, “Start”, “End” → `chrom`, `start`, `end`).
+- If a column clearly names a **metric**, map to that metric’s field; if the table only marks **presence** (no numbers), leave the metric numeric field unmapped (it will be handled with presence flags later).
+- Do **not** coerce units (kb→bp) in this step—only annotate hints; conversion happens during *Normalization*.
+- The file name / tab caption becomes the default **`supplement_id`** if present.
+
+**Provenance & cache**
+- Store prompt ID, model, tool versions, and a hash of the header list; unchanged headers → cached mapping is reused.
+
+---
+
+## Step 4 — Row Assembly (LLM)
+
+**Purpose**  
+Turn each mapped source table into **schema-shaped rows** (intermediate JSON records) that the normalization and QC steps can process deterministically.
+
+**Inputs**
+- `table_mapping/<table_id>.mapping.json`
+- `raw_tables/<table_id>.parquet`
+- `out/paper_profile.json`
+
+**Outputs**
+- `intermediate_rows.jsonl` (append-only; one JSON object per row)
+- `logs/assembly.provenance.jsonl`
+
+**Responsibilities (checklist)**
+- [ ] Use the **mapping** to pull values from each source row into **target field keys**.
+- [ ] Place coordinates into the canonical slots **without unit conversion**: `(chrom, start, end, snp_pos, is_snp)`.  
+  - Window present → set `start`, `end`, `is_snp = 0`, leave `snp_pos` empty.  
+  - SNP present → set `snp_pos`, `is_snp = 1`, leave `start/end` empty.
+- [ ] Set `species`, `assembly`, and default `population1/2` from the **profile** when appropriate.
+- [ ] Set `supplement_id` from the mapping (file/tab) and `parsed_from` (e.g., `MOESM1.docx: Table S4`).
+- [ ] Metrics: copy numeric values **as-is** (no transformation); if a metric is **used** but numeric is absent, set `*_presence = "used"`.
+- [ ] Gene-only rows: if only gene names are provided, fill `gene_symbol` and set coordinate fields **empty**.
+- [ ] Never merge across tables here—**one source row ⇒ one assembled record**.
+
+**LLM contract**
+- Input: the **mapping JSON**, a small **header→index** preview, and a batch of source rows.
+- Output: **array of JSON objects** with **only** PSSDB fields (unknowns omitted or empty).
+- No unit conversion, no guesses; if parsing fails for a cell, leave fields empty and add a short note.
+
+**Intermediate row shape (illustrative)**
+~~~json
+{
+  "species": "Bos taurus",
+  "common_name": "cattle",
+  "assembly": "UMD3.1.1",
+  "doi": "10.1186/s12711-018-0381-2",
+  "pmid": "",
+  "article_title": "Genome-wide scan ... Nelore cattle",
+  "article_url": "https://doi.org/10.1186/s12711-018-0381-2",
+  "supplement_id": "Table S4",
+  "notes": "Window parsed from 'Chr:Start(kb)-End(kb)'.",
+  "chrom": "5",
+  "start": "2000",              // still kb here; conversion happens in Normalization
+  "end": "2100",                // still kb here
+  "snp_pos": "",
+  "is_snp": 0,
+  "gene_symbol": "DEF2",
+  "gene_id": "",
+  "gene_overlap_type": "",
+  "Fst": "",
+  "EHH": "",
+  "XP_EHH": "",
+  "iHS": "-1.95",
+  "nSL": "",
+  "XP_CLR": "",
+  "H12": "",
+  "H2_H1": "",
+  "omega": "",
+  "Pi": "",
+  "TajimaD": "",
+  "Fst_p": "",
+  "EHH_p": "",
+  "XP_EHH_p": "",
+  "iHS_p": "",
+  "nSL_p": "",
+  "XP_CLR_p": "",
+  "H12_p": "",
+  "H2_H1_p": "",
+  "omega_p": "",
+  "Pi_p": "",
+  "TajimaD_p": "",
+  "population1": "NeC",
+  "population2": "NeS",
+  "population_note": "As per profile default for this table",
+  "allele_tested": "",
+  "ancestral_allele": "",
+  "derived_allele": "",
+  "evidence_type": "table",
+  "call_confidence": "table_exact",
+  "parsed_from": "MOESM1.docx: Table S4",
+  "qc_flag": "",
+  "Fst_presence": "",
+  "EHH_presence": "",
+  "XP_EHH_presence": "",
+  "iHS_presence": "",
+  "nSL_presence": "",
+  "XP_CLR_presence": "",
+  "H12_presence": "",
+  "H2_H1_presence": "",
+  "omega_presence": "",
+  "Pi_presence": "",
+  "TajimaD_presence": "",
+  "metric_presence_note": ""
+}
+~~~
+
+**Parsing rules & edge cases**
+- **Composite columns** (e.g., `Chr:Start-End`, `Chr:Start(kb)-End(kb)`) are split into target fields; if parsing fails, leave them empty and add a short `notes`.
+- **Multiple genes** in one cell → either produce **one record per gene** (recommended) or keep the gene list and mark in `notes` (configurable).
+- **Population columns** present → use them; otherwise, fall back to profile defaults for the comparison pair used by the table.
+- **Presence-only tables** → set the appropriate `*_presence = "used"` and leave numeric fields empty.
+- **Do not**: normalize units, correct assemblies, merge metrics, or infer missing coordinates (these belong to later stages).
+
+**Provenance & cache**
+- For each emitted record, record `source_table_id`, source row index, and a `row_sha1` over the normalized source row.  
+- Re-assembly skips previously seen `(source_table_id, row_sha1)` tuples.
+
