@@ -1,50 +1,66 @@
-# PSSDB — From Papers to a Standardized Dataset (GitHub-safe)
+# PSSDB — From Papers to a Standardized Dataset (Ingestion Pipeline)
 
-Below is a clean, presentation-ready view of how we turn **PDF articles + supplements** into a **strict, merge-ready CSV** for the central database.
+The diagram and summary below describe how the ingestion component converts **PDF articles and supplements** into a **strict, merge‑ready CSV** and then **loads it into the database**.
 
-## Block Diagram (S-shaped overview)
+## Block Diagram (S‑shaped, with LLM vs Code markers)
 ```mermaid
 flowchart TB
-  classDef step fill:#eef,stroke:#6b7bb6,stroke-width:1.2px,rx:8,ry:8,color:#0f1a3b;
+  %% Styles
+  classDef llm fill:#f3e8ff,stroke:#7e22ce,stroke-width:1.2px,rx:8,ry:8,color:#2e1065;
+  classDef code fill:#eef,stroke:#6b7bb6,stroke-width:1.2px,rx:8,ry:8,color:#0f1a3b;
   classDef out fill:#fff7e6,stroke:#c08a2d,rx:6,ry:6,color:#5c3b00;
+  linkStyle default stroke:#7f8fbf,stroke-width:1.2px
 
+  %% Top row (left → right)
   subgraph TOP[ ]
     direction LR
-    A["Profile<br/>Extract species, assembly, metrics, populations<br/>→ paper_profile.json"]:::step
-    B["Parsing<br/>Tables and text, keep provenance<br/>→ raw_tables/, raw_text/, provenance.jsonl"]:::step
-    C["Header Mapping<br/>Source → target schema<br/>→ table_mapping/"]:::step
-    D["Row Assembly<br/>Schema-shaped rows<br/>→ intermediate_rows.jsonl"]:::step
+    A["Profile (LLM)<br/>Extract species, assembly, metrics, populations<br/>→ paper_profile.json"]:::llm
+    B["Parsing (CODE)<br/>Read tables and text; keep provenance<br/>→ raw_tables/, raw_text/, provenance.jsonl"]:::code
+    C["Header Mapping (LLM)<br/>Map source headers to target schema<br/>→ table_mapping/"]:::llm
+    D["Row Assembly (LLM)<br/>Produce schema-shaped rows<br/>→ intermediate_rows.jsonl"]:::llm
   end
 
+  %% Bottom row (right → left)
   subgraph BOTTOM[ ]
     direction RL
-    E["Normalization<br/>Units, names, kb→bp<br/>→ normalized_rows.parquet"]:::step
-    F["Gene Annotation<br/>Intersect with GTF/GFF<br/>→ annotated_rows.parquet"]:::step
-    G["Metric Merge<br/>Combine metrics per signal<br/>→ merged_rows.parquet"]:::step
-    H["QC<br/>Validate fields and rules<br/>→ out/qc_report.json"]:::step
-    I["Export<br/>Schema-checked CSV<br/>→ out/result.csv"]:::out
+    E["Normalization (CODE)<br/>Unify units and names; kb→bp; types<br/>→ normalized_rows.parquet"]:::code
+    F["Gene Annotation (CODE)<br/>Intersect with GTF/GFF for the assembly<br/>→ annotated_rows.parquet"]:::code
+    G["Metric Merge (CODE)<br/>Combine Fst, XP-EHH, iHS per signal<br/>→ merged_rows.parquet"]:::code
+    H["QC (CODE)<br/>Validate coordinates, fields, presence rules<br/>→ out/qc_report.json"]:::code
+    I["Export (CODE)<br/>Exact column order; schema-checked CSV<br/>→ out/result.csv"]:::out
+    J["Database Load (CODE)<br/>Insert or append into PSSDB<br/>→ database or API"]:::code
   end
 
+  %% Flow connections forming an S
   A --> B --> C --> D --> E
-  E --> F --> G --> H --> I
+  E --> F --> G --> H --> I --> J
+
+  %% Legend
+  subgraph LEGEND[Legend]
+    direction LR
+    L1["LLM-driven"]:::llm
+    L2["Deterministic code"]:::code
+  end
 ```
 
-## Pipeline at a Glance (what each step does and why)
+## Pipeline at a Glance (neutral, step‑by‑step)
 
-**1) Profile (context).** We read the article once to capture the contract for this dataset: species and genome assembly, which selection metrics and thresholds were used, what populations are compared, and the citation. This becomes `paper_profile.json` and guides every decision later.
+1) **Profile (context).** The article is analyzed once to capture the dataset contract: species and genome assembly, selection metrics and thresholds, comparison populations, and citation metadata. The result is saved as paper_profile.json and used to guide all subsequent steps.
 
-**2) Parsing (mechanical intake).** We extract all tables and text as-is from PDFs/DOCX/XLSX/TSV and save a provenance trail (which file/sheet/page each row came from). No interpretation yet — just a clean, lossless snapshot in `raw_tables/` plus `raw_text/` and `provenance.jsonl`.
+2) **Parsing (mechanical intake).** All tables and text are extracted as-is from PDFs/DOCX/XLSX/TSV. A provenance trail records the origin of each row (file, sheet, page). No interpretation is performed at this stage.
 
-**3) Header Mapping (bridge to our schema).** Source headers are mapped to the fixed PSSDB schema (for example, Chr → chrom, BP → snp_pos). Any targets with no source are listed explicitly. The output makes the conversion repeatable and auditable.
+3) **Header Mapping (bridge to the schema).** Source column names are mapped to the fixed PSSDB schema (for example, Chr → chrom, BP → snp_pos). Missing targets are listed explicitly to keep the process auditable and repeatable.
 
-**4) Row Assembly (schema-shaped rows).** Each parsed table becomes rows with our exact fields. Coordinates are placed into (chrom, start, end, snp_pos, is_snp), populations come from the profile, and supplement_id points back to the source. If a metric is mentioned but no numbers are given, we set the corresponding presence flag to “used”.
+4) **Row Assembly (schema-shaped rows).** Parsed tables are converted into rows with the exact fields of the target schema. Coordinates are placed into (chrom, start, end, snp_pos, is_snp); populations follow the profile; supplement_id points to the original source. If a metric is used but has no numeric values, the corresponding presence flag is set to “used”.
 
-**5) Normalization (make rows comparable).** We standardize units and names (for example, kb to bp, assembly and population aliases, canonical metric names) and enforce strict types. Rows from different files become comparable.
+5) **Normalization (comparability).** Units and names are standardized (for example, kb to bp, canonical metric and assembly names, population aliases), and strict data types are enforced. Rows from different files become directly comparable.
 
-**6) Gene Annotation (biological context).** Using the specified assembly, we intersect coordinates with GTF/GFF to fill gene_symbol, gene_id, and gene_overlap_type (for example, exon, intron, nearby).
+6) **Gene Annotation (biological context).** Using the specified assembly, genomic intervals are intersected with GTF/GFF to fill gene_symbol, gene_id, and gene_overlap_type (such as exon, intron, nearby).
 
-**7) Metric Merge (one signal, many metrics).** Signals that refer to the same SNP or the same genomic window plus population pair are merged into one record, filling Fst, XP-EHH, iHS and other metrics side by side.
+7) **Metric Merge (one signal, many metrics).** Records that describe the same SNP or the same genomic window plus population pair are merged into a single row, bringing Fst, XP‑EHH, iHS, and other metrics together.
 
-**8) QC (trustworthy output).** We run consistency checks: coordinate logic, population fields, presence flags versus numeric values, and mandatory metadata. Only a green QC produces the final files.
+8) **QC (trustworthy output).** Consistency checks validate coordinate logic, population fields, presence flags versus numeric values, and mandatory metadata. Only a successful QC produces final artifacts.
 
-**9) Export (ready for the database).** We write a CSV in the exact column order required by PSSDB and validate it against our table schema. The result is out/result.csv — merge-ready, reproducible, and traceable back to its sources.
+9) **Export (merge‑ready CSV).** Data are written in the exact column order required by PSSDB and validated against the table schema. The deliverable is out/result.csv, reproducible and traceable to its sources.
+
+10) **Database Load (ingestion into PSSDB).** The validated CSV is inserted or appended to the central database (or posted to an API endpoint), completing the ingestion cycle and making the data available for browsing and downstream analyses.
