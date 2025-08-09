@@ -605,3 +605,117 @@ Guarantee that merged rows are **internally consistent, within expected ranges, 
 - Record tool versions, rule set hash, and rule outcomes.  
 - Cache uses `(row_sha1, rules_hash)`; when rules change, only affected rows are rechecked.
 
+## Step 9 — Export (CODE)
+
+**Purpose**  
+Emit a **merge-ready CSV** that strictly follows the PSSDB column order, types, and CSV dialect, together with minimal artifacts that prove integrity.
+
+**Inputs**
+- `merged_rows.qc.parquet` (or `merged_rows.parquet` if QC flags are allowed)
+- `schemas/pssdb_table_schema.json` (frictionless schema)
+- `templates/pssdb_empty_result.csv` (authoritative column order)
+
+**Outputs**
+- `out/result.csv` (UTF-8, no BOM)
+- `out/result.sha256` (checksum of the CSV)
+- `out/result.nrows.txt` (row count)
+- `out/export.report.json` (stats: null coersions, type casts, dropped columns)
+- Optional: `out/result.csv.gz` (compressed), `out/result.sample.csv` (top N rows)
+
+**CSV dialect**
+- Delimiter: `,`
+- Quote: `"` (double quote), escape by doubling `"`
+- Line endings: `\n`
+- Header: **present** (exact order from the template)
+- Nulls: empty cell (`""`), not `NA/NULL/.`
+
+**Responsibilities (checklist)**
+- [ ] **Column order:** emit exactly the order defined in `templates/pssdb_empty_result.csv`.  
+- [ ] **Type finalization:** cast ints (e.g., `start`, `end`, `snp_pos`, `is_snp`) and floats (metrics, p-values). Empty → blank cell.  
+- [ ] **String normalization:** trim, ensure UTF-8; forbid control chars except `\n` inside quoted cells (rare; better remove).  
+- [ ] **Booleans/enums:** `is_snp` is `0` or `1`; presence flags are string values (typically `""` or `"used"`).  
+- [ ] **Sorting (deterministic, optional):** `species, assembly, chrom (natural sort), start, snp_pos, population1, population2`.  
+- [ ] **QC guard:** if any `qc_flag` is non-empty and policy is “block”, fail export with a clear message; if policy is “allow”, carry flags through.  
+- [ ] **Schema validation:** re-validate the produced CSV against `schemas/pssdb_table_schema.json` (frictionless) and abort on violation.  
+- [ ] **Integrity artifacts:** write `*.sha256` and `*.nrows.txt`; include counts and casting warnings in `export.report.json`.
+
+**Rules & edge cases**
+- **Empty numeric cells** remain empty (no `0` substitution).  
+- **Scientific notation** is allowed; do not format/round beyond what normalization produced.  
+- **Chromosome sorting:** use natural order (`1…22`, then `X`, `Y`, `M`/`MT`, then others).  
+- **Large exports:** optionally split into chunks (e.g., 5M rows per file) and emit a simple `MANIFEST.json` with part filenames and checksums.
+
+**Provenance & cache**
+- Include the input parquet checksum, template checksum, tool versions, and row count in `export.report.json`.  
+- If inputs and template are unchanged and the checksum matches, skip regeneration.
+
+---
+
+## Step 10 — Database Load (CODE)
+
+**Purpose**  
+Insert the validated CSV into the central PSSDB **safely and idempotently**, with referential integrity and reproducible audit logs.
+
+**Inputs**
+- `out/result.csv` (and optional `MANIFEST.json` for multipart)
+- `out/qc_report.json` (must be “green” or policy-allowed)
+- `db/config.yaml` (credentials, target schema, mode: `append|upsert`)
+- Optional: `dicts/` (species/assembly/population reference tables for FK checks)
+
+**Outputs**
+- Rows in target tables (e.g., `pssdb.signals`)
+- `out/load.report.json` (row counts, timing, rejected rows if any)
+- Optional: `out/load.rejections.csv` (rows that failed FK/constraint checks)
+
+**Recommended flow (PostgreSQL example; analogous for other DBs)**
+1. **Pre-checks**
+   - Verify CSV checksum against `result.sha256`.  
+   - Verify QC policy (block on non-empty `qc_flag` if configured).  
+   - Confirm schema compatibility (CSV header equals DB column list).
+
+2. **Stage first**
+   - `CREATE TEMP TABLE stage_signals (LIKE pssdb.signals);`  
+   - `COPY stage_signals FROM STDIN WITH (FORMAT csv, HEADER true, DELIMITER ',', QUOTE '"');`  
+   - Run **light validations** in SQL (e.g., `is_snp` ∈ {0,1}, p-values in [0,1], non-null mandatorys).  
+   - **FK checks** against reference tables (`species`, `assemblies`, `populations`).
+
+3. **Idempotent upsert (or append)**
+   - Define a **natural or surrogate primary key**; typical choice:  
+     - SNP: `(species, assembly, chrom, snp_pos, population1, population2)`  
+     - Window: `(species, assembly, chrom, start, end, population1, population2)`  
+     - Or a precomputed `row_uid` (SHA-1 of the canonical key + doi).  
+   - `INSERT ... ON CONFLICT (...) DO UPDATE SET ...` for **upsert** mode, or `INSERT` only for **append** mode.  
+   - Record `ingest_batch_id`, `ingest_timestamp`, and `source_checksum` columns for lineage.
+
+4. **Post-load checks**
+   - Count deltas per species/assembly; compare with `result.nrows.txt`.  
+   - Spot-check a few keys exist in the target and match values.  
+   - Build or refresh **indexes** on merge keys and popular filters (e.g., `species, assembly, chrom, start, snp_pos`).
+
+5. **Commit & cleanup**
+   - Commit the transaction only if all checks pass; otherwise rollback and write `load.rejections.csv` with reasons.  
+   - Drop the staging table; archive `out/load.report.json` with timings and row counts.
+
+**API mode (alternative to direct DB)**
+- POST `result.csv` (or parts) to an **ingestion API** with a `batch_token` (idempotency key).  
+- The API performs steps 2–4 server-side and returns a structured report (accepted, rejected, errors, batch_id).  
+- Client stores the response as `out/load.report.json`.
+
+**Responsibilities (checklist)**
+- [ ] Guarantee **idempotency** (re-running the same batch does not duplicate rows).  
+- [ ] Enforce **referential integrity** (species/assembly/population exist).  
+- [ ] Use **transactions**; never leave partial loads.  
+- [ ] Log counts: staged, inserted, updated, rejected; capture representative error samples.  
+- [ ] Create/refresh **indexes** necessary for query latency targets.  
+- [ ] Emit a **human-readable summary** in `out/load.report.json`.
+
+**Rules & edge cases**
+- **Multipart loads:** stream each part into the same staging table; only after all parts succeed, run the merge.  
+- **Duplicate keys in CSV:** reject or collapse according to policy; always report how many and why.  
+- **Type drift:** if the DB column is stricter than the CSV (e.g., `INTEGER` but cell has scientific notation), reject and log; do not coerce on load.  
+- **Versioning:** optionally tag every load with a `dataset_version` and keep a `batches` table with checksums and Git commit hashes.
+
+**Provenance & audit**
+- Save DB DDL version, connection parameters hash (not secrets), and the exact SQL statements (or API endpoint and payload IDs).  
+- Keep `batch_id`, counts, and timing; include `result.sha256` to link batch → file artifact.
+
