@@ -487,3 +487,121 @@ Add **biological context** by intersecting normalized genomic intervals with **a
 **Provenance & cache**
 - Store GTF/GFF filename, version, and checksum; include the command line / options used for `intersect`/`closest`.  
 - Cache keyed by `(row_sha1, gtf_sha1, params_hash)` to avoid re-annotation when nothing changed.
+
+## Step 7 — Metric Merge (CODE)
+
+**Purpose**  
+Produce **one record per biological signal** by combining metrics that refer to the same SNP or the same genomic window and population pair.
+
+**Inputs**
+- `annotated_rows.parquet` (or `normalized_rows.parquet` if annotation is skipped)
+- Optional: `config/merge.yaml`
+  - `key_tolerance_bp: 0` (0 = exact match; >0 enables fuzzy join)
+  - `directional_metrics: ["XP_EHH"]` (flip sign on population swap)
+  - `precedence: ["numeric_then_presence", "prefer_first_source"]`
+
+**Outputs**
+- `merged_rows.parquet`
+- `logs/merge.report.json` (merge stats, conflicts, flips, duplicates)
+
+**Merge keys (canonical)**
+- **SNP key**: `(species, assembly, chrom, snp_pos, population1, population2)`  
+- **Window key**: `(species, assembly, chrom, start, end, population1, population2)`  
+- Keys are **exclusive** (SNP vs window) based on `is_snp`.  
+
+**Responsibilities (checklist)**
+- [ ] Group rows by the canonical key (exact match; or within `key_tolerance_bp` if configured).  
+- [ ] Within each group, **coalesce** metric fields (Fst, XP_EHH, iHS, nSL, XP_CLR, H12, H2_H1, omega, Pi, TajimaD) and their `_p` fields.  
+- [ ] Preserve **provenance**: concatenate `supplement_id` and `parsed_from` (e.g., `"; "`-separated) and summarize sources in `notes`.  
+- [ ] Ensure **population orientation** is canonical (see rules) before merging.  
+- [ ] Prefer **numeric values** over presence flags; if only presence exists, set `*_presence="used"` and leave the numeric field empty.  
+- [ ] If multiple numeric values exist for the same metric in one group, choose a deterministic policy (see rules).
+
+**Population orientation & directional metrics**
+- Determine the **canonical order** for `population1/2` from the profile (e.g., `NeC` vs `NeS`).  
+- If a row arrives with reversed order, **swap** `population1/2`.  
+- For **directional metrics** (default: `XP_EHH`), **flip the sign** when swapping populations.  
+- Non-directional metrics (e.g., **Fst**) are unaffected; within-population metrics (e.g., **iHS**) normally carry the study’s default pair or empty `population2`.
+
+**Coalescing policy (conflict resolution)**
+- **Presence vs numeric:** if at least one numeric value exists → use it; else set `*_presence="used"`.  
+- **Multiple numerics:** default policy is **prefer_first_source** (stable, provenance-ordered). Alternatives by config:  
+  - `max_abs` (take the value with largest absolute magnitude),  
+  - `mean` (average of consistent replicates),  
+  - `median`.  
+  Chosen policy is recorded in `merge.report.json`.  
+- **P-values:** if multiple `_p` exist, prefer the one that accompanies the chosen metric value; otherwise keep the **smallest** valid p (configurable).  
+- **Text fields:** concatenate unique values (e.g., `notes`, `supplement_id`, `parsed_from`).
+
+**Fuzzy merge (optional)**
+- If `key_tolerance_bp > 0`, allow SNPs/windows within that distance to collapse to one signal (use the **smallest start** and **largest end** for windows; the **mode** for chromosome). Record a warning in `merge.report.json`.
+
+**Emitted record shape (conceptual)**
+- The merged row retains **all PSSDB fields**; for metrics not present in the group, fields remain empty while presence flags can be set to `"used"` if relevant.
+
+**Provenance & cache**
+- For every merged group, list contributing `source_table_id`s in `merge.report.json`.  
+- Cache key: `(group_key_sha1, policy_hash)`.
+
+---
+
+## Step 8 — QC (CODE)
+
+**Purpose**  
+Guarantee that merged rows are **internally consistent, within expected ranges, and schema-valid**, before export and database load.
+
+**Inputs**
+- `merged_rows.parquet`
+- `schemas/pssdb_table_schema.json` (frictionless table schema)
+- `config/qc.yaml` (rule toggles and thresholds)
+
+**Outputs**
+- `out/qc_report.json` (summary + per-rule failures)
+- `merged_rows.qc.parquet` (same rows with `qc_flag` filled)
+- Optional: `qc_fixes.jsonl` (if an auto-fix pass is enabled)
+
+**Validation layers**
+1. **Schema validation** (types, required fields, enumerations) using frictionless/pandera.  
+2. **Domain checks** (numeric ranges, coordinate logic).  
+3. **Relational checks** (duplication and key uniqueness).
+
+**Rules (typical)**
+- **Types & required fields**
+  - `species`, `assembly`, `supplement_id`, `evidence_type` must be non-empty.  
+  - Metrics and `_p` fields must be numeric when present.
+- **Coordinate invariants**
+  - `is_snp = 1` ⇒ `snp_pos` set; `start/end` empty.  
+  - `is_snp = 0` ⇒ `start/end` set; `snp_pos` empty.  
+  - `start ≤ end`; coordinates are integers; chromosome strings are normalized (`chr` prefix removed).
+- **Population logic**
+  - `population1 ≠ population2`.  
+  - Population codes exist in the profile dictionary.  
+  - For **directional metrics** (e.g., XP_EHH), signs match the canonical population orientation.
+- **Ranges**
+  - `0 ≤ Fst ≤ 1` (if present).  
+  - `0 ≤ *_p ≤ 1`.  
+  - `|iHS|` and `XP_EHH` are real numbers (no hard bounds, but must parse).  
+  - Window length not exceeding a configured limit if set (e.g., `max_window_bp`).
+- **Presence vs value**
+  - If a numeric value exists, the corresponding `*_presence` must be empty.  
+  - If no numeric value and the method is listed in the profile for this comparison, `*_presence="used"` is allowed.
+- **Duplication & keys**
+  - No duplicate **merge keys** remain after Step 7.  
+  - If duplicates exist, mark `qc_flag="duplicate_signal"`.
+
+**Outputs & flags**
+- Every failed check yields a row-level `qc_flag` (comma-separated when multiple):  
+  - Examples: `missing_population`, `invalid_coords`, `p_out_of_range`, `population_order_conflict`, `duplicate_signal`, `type_mismatch`, `schema_violation`.  
+- `out/qc_report.json` includes:
+  - Totals: rows checked / passed / failed.  
+  - Per-rule failure counts and up to N example row IDs.  
+  - Optional histograms (e.g., window lengths, p-value distributions).
+
+**Optional auto-fix (“Auditor”)**
+- If enabled, produce a compact error list per row and pass it to an LLM **restricted to fixing only listed issues** (e.g., swap populations, clear presence flags, set empty when type-mismatch).  
+- The LLM returns a corrected batch (`qc_fixes.jsonl`), which is revalidated; only **green** rows are emitted to `merged_rows.qc.parquet`.
+
+**Provenance & cache**
+- Record tool versions, rule set hash, and rule outcomes.  
+- Cache uses `(row_sha1, rules_hash)`; when rules change, only affected rows are rechecked.
+
