@@ -40,8 +40,9 @@ flowchart TB
 
 
 ```
-
 ## Pipeline at a Glance 
+
+**Fail-fast gates.** The pipeline stops on unknown coordinate units, missing/ambiguous assembly when gene annotation is enabled, and uncertain population orientation for directional metrics (e.g., XP-EHH). These are treated as blocking errors, not warnings.
 
 1) **Profile (context).** The article is analyzed once to capture the dataset contract: species and genome assembly, selection metrics and thresholds, comparison populations, and citation metadata. The result is saved as paper_profile.json and used to guide all subsequent steps.
 
@@ -51,17 +52,22 @@ flowchart TB
 
 4) **Row Assembly (schema-shaped rows).** Parsed tables are converted into rows with the exact fields of the target schema. Coordinates are placed into (chrom, start, end, snp_pos, is_snp); populations follow the profile; supplement_id points to the original source. If a metric is used but has no numeric values, the corresponding presence flag is set to “used”.
 
-5) **Normalization (comparability).** Units and names are standardized (for example, kb to bp, canonical metric and assembly names, population aliases), and strict data types are enforced. Rows from different files become directly comparable.
+5) **Normalization (comparability + unit guard).** Standardize units/names/types; **fail-fast** if units cannot be established for coordinates required downstream.
 
-6) **Gene Annotation (biological context).** Using the specified assembly, genomic intervals are intersected with GTF/GFF to fill gene_symbol, gene_id, and gene_overlap_type (such as exon, intron, nearby).
+6) **Assembly Check & Liftover (optional).** If the article coordinates differ from the target assembly, perform chain-based liftover; **fail-fast** if chains are missing or loss exceeds a configured threshold.
 
-7) **Metric Merge (one signal, many metrics).** Records that describe the same SNP or the same genomic window plus population pair are merged into a single row, bringing Fst, XP‑EHH, iHS, and other metrics together.
+7) **Gene Annotation (context).** Intersect with GTF/GFF on the verified assembly; emit one row per **(signal × gene)**.
 
-8) **QC (trustworthy output).** Consistency checks validate coordinate logic, population fields, presence flags versus numeric values, and mandatory metadata. Only a successful QC produces final artifacts.
+8) **Orientation Check (directional tests).** Verify canonical population order from the profile; for directional metrics, do not flip sign without explicit evidence; otherwise **fail-fast** with `orientation_uncertain`.
 
-9) **Export (merge‑ready CSV).** Data are written in the exact column order required by PSSDB and validated against the table schema. The deliverable is out/result.csv, reproducible and traceable to its sources.
+9) **Metric Merge (one signal, many metrics, gene-aware).** Merge by keys that include `gene_id` (when present) to preserve the (signal × gene) mapping.
 
-10) **Database Load (ingestion into PSSDB).** The validated CSV is inserted or appended to the central database (or posted to an API endpoint), completing the ingestion cycle and making the data available for browsing and downstream analyses.
+10) **QC (trustworthy output).** Consistency checks validate coordinate logic, population fields, presence flags versus numeric values, and mandatory metadata. Only a successful QC produces final artifacts.
+
+11) **Export (merge‑ready CSV).** Data are written in the exact column order required by PSSDB and validated against the table schema. The deliverable is out/result.csv, reproducible and traceable to its sources.
+
+12) **Database Load (ingestion into PSSDB).** The validated CSV is inserted or appended to the central database (or posted to an API endpoint), completing the ingestion cycle and making the data available for browsing and downstream analyses.
+
 
 
 # Detailed Step Descriptions
