@@ -35,12 +35,7 @@ flowchart TB
   A --> B --> C --> D --> E
   E --> F --> G --> H --> I --> J
 
-  %% Legend
-  subgraph LEGEND[Legend]
-    direction LR
-    L1["LLM-driven"]:::llm
-    L2["Deterministic code"]:::code
-  end
+
 ```
 
 ## Pipeline at a Glance 
