@@ -398,3 +398,97 @@ Turn each mapped source table into **schema-shaped rows** (intermediate JSON rec
 - For each emitted record, record `source_table_id`, source row index, and a `row_sha1` over the normalized source row.  
 - Re-assembly skips previously seen `(source_table_id, row_sha1)` tuples.
 
+## Step 5 — Normalization (CODE)
+
+**Purpose**  
+Make rows from different sources **comparable and machine-checkable** by standardizing units, names, and types, and by fixing coordinate fields into a single canonical convention.
+
+**Inputs**
+- `intermediate_rows.jsonl`
+- `config/normalization.yaml` (dictionaries & options)
+  - `assemblies.yml` (aliases → canonical assembly name)
+  - `metrics.yml` (header/alias → canonical metric field, e.g., “XP-EHH” → `XP_EHH`)
+  - `populations.yml` (paper labels/aliases → canonical population IDs)
+  - `chrom_aliases.yml` (e.g., `chr1` → `1`, `MT` → `M`, etc.)
+
+**Outputs**
+- `normalized_rows.parquet`
+- `logs/normalize.report.json` (counts, coercions, dropped cells, warnings)
+
+**Canonical conventions**
+- **Coordinates:** 1-based, **inclusive**; chromosomes as strings without the `chr` prefix (e.g., `1`, `X`, `M`).  
+- **Windows:** set `start` and `end` (integers, bp); `is_snp=0`, `snp_pos` empty.  
+- **SNPs:** set `snp_pos` (integer, bp), `is_snp=1`; `start/end` empty.  
+- **Missing:** empty string (`""`) or `null` for JSON; never “NA”/“.” in final rows.  
+- **Numbers:** US decimal point; scientific notation allowed (e.g., `3.2e-5`).
+
+**Responsibilities (checklist)**
+- [ ] **Chromosomes:** strip `chr` prefix, apply contig aliases, keep case/ID as per assembly (e.g., `X`, `Y`, `M`).  
+- [ ] **Units:** convert **kb → bp** where indicated by mapping/profile hints; round to **integers**.  
+- [ ] **Types:** coerce all metric and p-value fields to numeric; leave empty on failure.  
+- [ ] **Names:** canonicalize `assembly`, `species`, metric names, and populations via YAML dictionaries.  
+- [ ] **Presence vs. value:** if a numeric metric is absent but the method is used, set `*_presence="used"` (do not invent numbers).  
+- [ ] **Invariants:** enforce `start ≤ end`; `is_snp=1 ⇒ snp_pos set` and `start/end empty`; `is_snp=0 ⇒ start/end set` and `snp_pos empty`.  
+- [ ] **Text cleanups:** trim whitespace; normalize Unicode; keep scientifically meaningful symbols (≤, ≥, ±, Greek letters).  
+- [ ] **Notes:** preserve operators like `p < 0.01` by storing numeric `0.01` and appending `p_operator: "<"` to `notes`.
+
+**Rules & edge cases**
+- **Composite coordinates** already split at Step 4 are now converted to bp; if the unit is unclear, **leave as-is** and append `notes: "unit_unknown"` (QC will flag).  
+- **Out-of-range** coordinates (e.g., `end` beyond chromosome length if known) are left in place but flagged in `notes` (`"end_exceeds_chrom_length"`)—QC can decide the severity.  
+- **Non-numeric** cells in numeric fields (e.g., `"NA"`, `"-"`, `"."`) become empty; the event is counted in `normalize.report.json`.  
+- **Population defaults:** when a table omits population columns but the profile prescribes a pair for that test, fill `population1/2` from the profile and annotate in `population_note`.
+
+**Provenance & cache**
+- Record per-field conversions (e.g., `kb→bp`, decimal localization) in `normalize.report.json`.  
+- Cached by `(row_sha1, config_hash)`; only rows affected by changed rules are recomputed.
+
+---
+
+## Step 6 — Gene Annotation (CODE)
+
+**Purpose**  
+Add **biological context** by intersecting normalized genomic intervals with **assembly-matched** gene annotations, filling `gene_symbol`, `gene_id`, and `gene_overlap_type`.
+
+**Inputs**
+- `normalized_rows.parquet`
+- Assembly-specific **GTF/GFF** (e.g., `data/gtf/UMD3.1.1.gtf.gz`)
+- Optional: `config/annotation.yaml` (region sizes & precedence)
+  - `promoter_bp: 2000` (upstream/downstream window)
+  - `overlap_priority: [exon, utr, intron, promoter, downstream, intergenic]`
+  - `nearest_k: 1` (how many nearest genes to keep for intergenic sites)
+
+**Outputs**
+- `annotated_rows.parquet`
+- `logs/annotation.report.json` (counts by overlap type, multi-hit statistics)
+
+**Algorithm (typical bedtools flow)**
+1. **Prepare intervals.**  
+   - For SNPs: create a 1-bp interval `[snp_pos, snp_pos]`.  
+   - For windows: use `[start, end]` as is (1-based inclusive).
+2. **Exact overlaps.**  
+   - `bedtools intersect` (or `pybedtools`) row intervals vs. gene features from GTF/GFF.  
+   - Derive `gene_overlap_type` from the feature: `exon`, `intron`, `UTR` (5′/3′ collapsed to `utr`).
+3. **Promoters & neighbors.**  
+   - Build promoter regions as `[TSS - promoter_bp, TSS - 1]` (strand-aware).  
+   - For intervals with no feature overlap, classify as `promoter`/`downstream` if within the configured window; otherwise `intergenic`.
+4. **Nearest gene(s) for intergenic.**  
+   - `bedtools closest` to assign the nearest `nearest_k` gene(s); annotate with distance (bp).
+5. **Symbol/ID resolution.**  
+   - Take `gene_id` and `gene_symbol` from the GTF attributes (prefer curated symbols; fall back to stable IDs).  
+   - Normalize symbols using a small synonym list when available (e.g., Ensembl vs. NCBI casing).
+
+**Emission policy**
+- **One row per (signal × gene)** is recommended for clarity and downstream filtering (e.g., one 100-kb window can yield multiple genes).  
+  - Alternative (configurable): keep one “best” hit per signal using `overlap_priority` and minimum distance as tie-breaker.
+- Set `gene_overlap_type` to one of: `exon`, `utr`, `intron`, `promoter`, `downstream`, `intergenic`.  
+- When multiple classes match (rare with complex transcripts), choose the **highest priority** from `overlap_priority` and list others in `notes`.
+
+**Edge cases**
+- **Unplaced contigs/scaffolds:** annotate only if present in the GTF/GFF; otherwise leave gene fields empty and note `contig_unannotated`.  
+- **Strand handling:** promoter localization is strand-aware; downstream is the opposite direction from TSS.  
+- **Very large windows:** may overlap dozens of genes—either emit multiple rows (default) or cap by `max_genes_per_signal` and note truncation.  
+- **Mitochondrial genes:** ensure chromosome aliasing (`M`, `MT`) matches the annotation set.
+
+**Provenance & cache**
+- Store GTF/GFF filename, version, and checksum; include the command line / options used for `intersect`/`closest`.  
+- Cache keyed by `(row_sha1, gtf_sha1, params_hash)` to avoid re-annotation when nothing changed.
