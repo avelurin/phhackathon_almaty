@@ -405,7 +405,10 @@ Turn each mapped source table into **schema-shaped rows** (intermediate JSON rec
 ## Step 5 — Normalization (CODE)
 
 **Purpose**  
-Make rows from different sources **comparable and machine-checkable** by standardizing units, names, and types, and by fixing coordinate fields into a single canonical convention.
+Make rows from different sources comparable and machine-checkable; enforce explicit units for coordinates.
+
+**Fail-fast**
+- If coordinate units required for downstream steps cannot be established (e.g., window columns in “kb” vs “bp” are ambiguous), stop with `unit_unknown` and do not proceed to annotation/merge.
 
 **Inputs**
 - `intermediate_rows.jsonl`
@@ -448,7 +451,28 @@ Make rows from different sources **comparable and machine-checkable** by standar
 
 ---
 
-## Step 6 — Gene Annotation (CODE)
+## Step 6 — Assembly Check & Liftover (CODE)
+
+**Purpose**  
+Ensure coordinates match the target assembly used for annotation and downstream browsing.
+
+**Inputs**
+- `normalized_rows.parquet`
+- Chain files (e.g., `from_UMD3.1.1_to_ARSmX.chain`) for CrossMap / UCSC liftOver
+- `config/liftover.yaml` (loss tolerance, target assembly)
+
+**Behavior**
+- If `profile.assembly == target_assembly`: pass-through.  
+- Else: apply liftover; drop rows that cannot be mapped; compute loss ratio.  
+- **Fail-fast** if chain is missing or loss ratio exceeds threshold (e.g., >5%).
+
+**Outputs**
+- `normalized_rows.lifted.parquet` (or pass-through alias)
+- `logs/liftover.report.json` (kept, dropped, reasons)
+
+---
+
+## Step 7 — Gene Annotation (CODE)
 
 **Purpose**  
 Add **biological context** by intersecting normalized genomic intervals with **assembly-matched** gene annotations, filling `gene_symbol`, `gene_id`, and `gene_overlap_type`.
