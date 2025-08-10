@@ -1,4 +1,33 @@
+# Positive Selection Signals Database (PSSDB)
+
+**PSSDB** is a cross-species, assembly-aware database of **recent positive-selection signals** aggregated from peer-reviewed studies.  
+**Goal:** provide a single, normalized source of windows/SNPs under selection with traceable provenance for downstream exploration and comparative analyses.
+
+**Team**  
+- <Full Name> — Project Lead / Bioinformatics  
+- <Full Name> — Data Engineering / ETL  
+- <Full Name> — Web / UI  
+- <Full Name> — Genomics Analyst  
+- Mentors: <Name>, <Name>
+
+---
+
+## What is in the database (short)
+
+Each record represents a **signal of recent positive selection** (SNP or genomic window). Fields are standardized across studies:
+
+- **Identifiers & source:** DOI/PMID, article title/URL, `supplement_id`, provenance.
+- **Species & assembly:** canonical species name, genome build (e.g., ARS-UCD1.2).
+- **Coordinates:** `chrom`, `start`, `end` (windows) or `snp_pos` (SNPs), `is_snp` (1/0); 1-based inclusive.
+- **Genes (when applicable):** `gene_symbol`, `gene_id`, `gene_overlap_type` (exon/utr/intron/promoter/downstream/intergenic).
+- **Metrics:** `Fst`, `XP_EHH`, `iHS`, `nSL`, `XP_CLR`, `H12`, `H2_H1`, `omega`, `Pi`, `TajimaD` and their `_p` variants when available; presence flags (`*_presence="used"`) when only the method is reported.
+- **Populations:** `population1`, `population2` (if applicable), and notes on the comparison.
+- **Quality & notes:** `qc_flag`, normalization notes, and processing metadata.
+
+> The ingestion pipeline (below) converts PDFs and supplements into this schema and loads validated records into the database.
+
 # PSSDB — From Papers to a Standardized Dataset (Ingestion Pipeline)
+
 
 The diagram and summary below describe how the ingestion component converts **PDF articles and supplements** into a **strict, merge‑ready CSV** and then **loads it into the database**.
 
