@@ -3,6 +3,8 @@
 **PSSDB** is a cross-species, assembly-aware database of **recent positive-selection signals** aggregated from peer-reviewed studies.  
 **Goal:** provide a single, normalized source of windows/SNPs under selection with traceable provenance for downstream exploration and comparative analyses.
 
+http://192.168.100.54:8000/species
+
 **Team**  
 - Aiziya Paizulla
 - Avel Urin
