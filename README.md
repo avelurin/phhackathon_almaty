@@ -4,14 +4,12 @@
 **Goal:** provide a single, normalized source of windows/SNPs under selection with traceable provenance for downstream exploration and comparative analyses.
 
 **Team**  
-- <Aiziya Paizulla>
-- <Avel Urin>
-- <Aleksandr Martynov>
-- <Elizaveta Kolomytseva>
-- <Mariia Mikhaleva>
-- Mentors: <Polina Malysheva>, <Yury Barbitoff>
-
----
+- Aiziya Paizulla
+- Avel Urin
+- Aleksandr Martynov
+- Elizaveta Kolomytseva
+- Mariia Mikhaleva  
+**Mentors:** Polina Malysheva, Yury Barbitoff
 
 ## What is in the database (short)
 
@@ -26,6 +24,10 @@ Each record represents a **signal of recent positive selection** (SNP or genomic
 - **Quality & notes:** `qc_flag`, normalization notes, and processing metadata.
 
 > The ingestion pipeline (below) converts PDFs and supplements into this schema and loads validated records into the database.
+
+
+--- 
+
 
 # PSSDB — From Papers to a Standardized Dataset (Ingestion Pipeline)
 
