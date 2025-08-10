@@ -4,11 +4,12 @@
 **Goal:** provide a single, normalized source of windows/SNPs under selection with traceable provenance for downstream exploration and comparative analyses.
 
 **Team**  
-- <Full Name> — Project Lead / Bioinformatics  
-- <Full Name> — Data Engineering / ETL  
-- <Full Name> — Web / UI  
-- <Full Name> — Genomics Analyst  
-- Mentors: <Name>, <Name>
+- <Aiziya Paizulla>
+- <Avel Urin>
+- <Aleksandr Martynov>
+- <Elizaveta Kolomytseva>
+- <Mariia Mikhaleva>
+- Mentors: <Polina Malysheva>, <Yury Barbitoff>
 
 ---
 
