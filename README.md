@@ -9,6 +9,7 @@
 - Aleksandr Martynov
 - Elizaveta Kolomytseva
 - Mariia Mikhaleva  
+
 **Mentors:** Polina Malysheva, Yury Barbitoff
 
 ## What is in the database (short)
